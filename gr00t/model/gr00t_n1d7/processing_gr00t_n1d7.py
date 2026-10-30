@@ -244,8 +244,14 @@ class Gr00tN1d7Processor(BaseProcessor):
         # Normalization
         use_mean_std: bool = False,
         letter_box_transform: bool = False,
+        # EE-VLA: only the first edge_vlm_views video keys go to the VLM; the others are
+        # returned as edge_pixel_values [V, 3, H, W] (uint8) for the per-view edge encoders.
+        use_edge_experts: bool = False,
+        edge_vlm_views: int = 1,
     ):
         self.modality_configs = parse_modality_configs(modality_configs)
+        self.use_edge_experts = use_edge_experts
+        self.edge_vlm_views = edge_vlm_views
 
         # Initialize StateActionProcessor for state/action normalization
         self.state_action_processor = StateActionProcessor(
@@ -507,6 +513,18 @@ class Gr00tN1d7Processor(BaseProcessor):
             images_perm = images.permute(0, 1, 2, 5, 3, 4).reshape(B, T * V, img_C, img_H, img_W)
             transformed_images = self.eval_image_transform(images_perm).numpy()
 
+        vlm_keys, edge_keys = self._split_views(image_keys)
+        if edge_keys:
+            # (B, T*V, C, H, W) with view-minor order -> VLM views / latest frame of edge views
+            per_view = transformed_images.reshape(B, T, V, *transformed_images.shape[2:])
+            n_vlm = len(vlm_keys)
+            transformed_observation["edge_pixel_values"] = torch.from_numpy(
+                np.ascontiguousarray(per_view[:, -1, n_vlm:])
+            )
+            transformed_images = np.ascontiguousarray(per_view[:, :, :n_vlm]).reshape(
+                B, T * n_vlm, *transformed_images.shape[2:]
+            )
+
         language_key = modality_config["language"].modality_keys[0]
         language = [
             re.sub(r"[^\w\s]", "", lang.lower()) if self.formalize_language else lang
@@ -744,12 +762,23 @@ class Gr00tN1d7Processor(BaseProcessor):
             assert v.dtype == torch.uint8, f"{v} is not a uint8 tensor"
             assert v.shape[1] == 3, f"{v} is not a 3 channel tensor"
 
+        vlm_keys, edge_keys = self._split_views(image_keys)
         stacked_images = torch.stack(
-            [temporal_stacked_images[view] for view in image_keys], dim=1
+            [temporal_stacked_images[view] for view in vlm_keys], dim=1
         ).flatten(0, 1)  # (T*V, C, H, W)
 
         vlm_inputs = self._apply_vlm_processing(stacked_images, language)
+        if edge_keys:
+            # Latest frame of each edge view: (V_edge, C, H, W) uint8.
+            vlm_inputs["edge_pixel_values"] = torch.stack(
+                [temporal_stacked_images[view][-1] for view in edge_keys]
+            ).numpy()
         return vlm_inputs
+
+    def _split_views(self, image_keys: list[str]) -> tuple[list[str], list[str]]:
+        if not self.use_edge_experts:
+            return list(image_keys), []
+        return list(image_keys[: self.edge_vlm_views]), list(image_keys[self.edge_vlm_views :])
 
     def save_pretrained(self, save_directory: str | Path) -> list[Path]:
         save_directory = Path(save_directory)
@@ -788,6 +817,9 @@ class Gr00tN1d7Processor(BaseProcessor):
                 # State augmentation
                 "exclude_state": self.exclude_state,
                 "state_dropout_prob": self.state_dropout_prob,
+                # EE-VLA
+                "use_edge_experts": self.use_edge_experts,
+                "edge_vlm_views": self.edge_vlm_views,
             },
         }
         with open(main_config_file, "w") as f:
@@ -877,6 +909,8 @@ class Gr00tN1d7Processor(BaseProcessor):
                 "max_action_horizon",
                 "max_state_dim",
                 "max_action_dim",
+                "use_edge_experts",
+                "edge_vlm_views",
             ]
             for key in override_keys:
                 if key in kwargs:

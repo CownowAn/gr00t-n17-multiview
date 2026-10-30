@@ -91,10 +91,19 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 load_bf16=self.config.model.load_bf16,
                 transformers_loading_kwargs=self.transformers_loading_kwargs,
                 output_loading_info=True,
+                **self._edge_kwargs(),
                 **self.transformers_loading_kwargs,
             )
 
             missing_keys = loading_info.get("missing_keys", [])
+            # EE-VLA: a base checkpoint has no edge encoders; start them from the pretrained
+            # DINOv3 weights and give the projections a fresh initialization.
+            edge_missing = [k for k in missing_keys if ".edge_vision." in k]
+            if edge_missing and model.action_head.edge_vision is not None:
+                model.action_head.edge_vision.load_pretrained_encoders()
+                model.action_head.edge_vision.reset_projections()
+                logging.info("edge encoders not in checkpoint - loaded pretrained DINOv3")
+                missing_keys = [k for k in missing_keys if ".edge_vision." not in k]
             mask_token_missing = any("mask_token" in key for key in missing_keys)
             if mask_token_missing and model.action_head.mask_token is not None:
                 with torch.no_grad():
@@ -141,6 +150,15 @@ class Gr00tN1d7Pipeline(ModelPipeline):
 
         return model
 
+    def _edge_kwargs(self) -> dict:
+        """EE-VLA model config overrides (only when enabled, so other runs are unchanged)."""
+        m = self.config.model
+        if not getattr(m, "use_edge_experts", False):
+            return {}
+        keys = ("use_edge_experts", "edge_vlm_views", "num_edge_views", "edge_expert_model",
+                "tune_edge_experts", "edge_dropout_p", "edge_dropout_unit")
+        return {k: getattr(m, k) for k in keys}
+
     def _get_statistics(
         self,
     ) -> dict[str, dict[str, dict[str, dict[str, list[float]]]]] | None:
@@ -180,6 +198,8 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 exclude_state=self.model_config.exclude_state,
                 state_dropout_prob=self.model_config.state_dropout_prob,
                 use_mean_std=self.model_config.use_mean_std,
+                use_edge_experts=getattr(self.model_config, "use_edge_experts", False),
+                edge_vlm_views=getattr(self.model_config, "edge_vlm_views", 1),
                 **self.transformers_loading_kwargs,
             )
         else:
@@ -209,6 +229,8 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 exclude_state=self.model_config.exclude_state,
                 state_dropout_prob=self.model_config.state_dropout_prob,
                 use_mean_std=self.model_config.use_mean_std,
+                use_edge_experts=getattr(self.model_config, "use_edge_experts", False),
+                edge_vlm_views=getattr(self.model_config, "edge_vlm_views", 1),
                 transformers_loading_kwargs=self.transformers_loading_kwargs,
             )
 

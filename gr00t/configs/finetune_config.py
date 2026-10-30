@@ -63,6 +63,18 @@ class FinetuneConfig:
     Dropout probability applied to state inputs for regularization during training.
     """
 
+    # --- EE-VLA ---
+    use_edge_experts: bool = False
+    """EE-VLA: only the first `edge_vlm_views` video keys go through the VLM; every other view
+    gets its own trainable DINOv3 encoder whose token joins the DiT cross-attention memory."""
+
+    edge_vlm_views: int = 1
+    edge_expert_model: str = "vit_base_patch16_dinov3.lvd1689m"
+    tune_edge_experts: bool = True
+    edge_dropout_p: float = 0.2
+    """Training-time probability of masking a sample's edge tokens out of the cross-attention."""
+    edge_dropout_unit: str = "sample"
+
     # --- Data Augmentation ---
     random_rotation_angle: int | None = None
     """Maximum rotation angle (in degrees) for random rotation augmentation of input images."""

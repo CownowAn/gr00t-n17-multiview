@@ -122,6 +122,16 @@ class Gr00tN1d7Config(PretrainedConfig):
     # Multi-embodiment parameters
     max_num_embodiments: int = 32
 
+    # EE-VLA: the first `edge_vlm_views` video keys go to the VLM; each other view gets its own
+    # trainable DINOv3 encoder (one token per view) appended to the DiT cross-attention memory.
+    use_edge_experts: bool = False
+    edge_vlm_views: int = 1
+    num_edge_views: int = 0
+    edge_expert_model: str = "vit_base_patch16_dinov3.lvd1689m"
+    tune_edge_experts: bool = True
+    edge_dropout_p: float = 0.2
+    edge_dropout_unit: str = "sample"
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         for key, value in kwargs.items():

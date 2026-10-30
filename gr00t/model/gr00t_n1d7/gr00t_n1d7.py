@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import logging
+import os
 from typing import Any, Tuple
 
 import torch
@@ -91,6 +92,20 @@ class Gr00tN1d7ActionHead(nn.Module):
         else:
             self.vl_self_attention = nn.Identity()
 
+        # EE-VLA edge vision encoders (one trainable DINOv3 per edge view).
+        self.edge_vision = None
+        if getattr(config, "use_edge_experts", False):
+            from gr00t.model.modules.edge_vision import EdgeVisionEncoder
+
+            self.edge_vision = EdgeVisionEncoder(
+                num_views=config.num_edge_views,
+                out_dim=config.backbone_embedding_dim,
+                model_name=config.edge_expert_model,
+                dropout_p=config.edge_dropout_p,
+                dropout_unit=config.edge_dropout_unit,
+                tune=config.tune_edge_experts,
+            )
+
         if config.add_pos_embed:
             self.position_embedding = nn.Embedding(config.max_seq_len, self.input_embedding_dim)
             nn.init.normal_(self.position_embedding.weight, mean=0.0, std=0.02)
@@ -117,6 +132,8 @@ class Gr00tN1d7ActionHead(nn.Module):
         self.set_trainable_parameters(
             config.tune_projector, config.tune_diffusion_model, config.tune_vlln
         )
+        if self.edge_vision is not None and not config.tune_edge_experts:
+            self.edge_vision.encoders.requires_grad_(False)
 
     def set_trainable_parameters(
         self, tune_projector: bool, tune_diffusion_model: bool, tune_vlln: bool
@@ -172,11 +189,19 @@ class Gr00tN1d7ActionHead(nn.Module):
         sample = (1 - sample) * self.config.noise_s
         return sample
 
-    def process_backbone_output(self, backbone_output: BatchFeature) -> BatchFeature:
+    def process_backbone_output(
+        self, backbone_output: BatchFeature, action_input: BatchFeature | None = None
+    ) -> BatchFeature:
         backbone_features = backbone_output["backbone_features"]
         backbone_features = self.vlln(backbone_features)
         backbone_features = self.vl_self_attention(backbone_features)
         backbone_output["backbone_features"] = backbone_features
+        if self.edge_vision is not None:
+            # memory = [VL tokens | edge tokens] (edge tokens read by the image-attending blocks)
+            backbone_output = self.edge_vision.route(backbone_output, action_input["edge_pixel_values"])
+            if os.environ.get("GR00T_EDGE_ABLATE") == "1":  # diagnostic: hide every edge token
+                n = self.edge_vision.num_views
+                backbone_output["backbone_attention_mask"][:, -n:] = False
         return backbone_output
 
     def forward(self, backbone_output: BatchFeature, action_input: BatchFeature) -> BatchFeature:
@@ -200,7 +225,7 @@ class Gr00tN1d7ActionHead(nn.Module):
         # Set frozen modules to eval
         self.set_frozen_modules_to_eval_mode()
 
-        backbone_output = self.process_backbone_output(backbone_output)
+        backbone_output = self.process_backbone_output(backbone_output, action_input)
 
         # Get vision and language embeddings.
         vl_embeds = backbone_output.backbone_features
@@ -304,7 +329,7 @@ class Gr00tN1d7ActionHead(nn.Module):
                 - backbone_features: [B, seq_len, backbone_embedding_dim]
                 - state_features: [B, 1, input_embedding_dim]
         """
-        backbone_output = self.process_backbone_output(backbone_output)
+        backbone_output = self.process_backbone_output(backbone_output, action_input)
 
         # Get vision and language embeddings.
         vl_embeds = backbone_output.backbone_features

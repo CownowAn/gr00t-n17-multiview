@@ -80,6 +80,18 @@ if __name__ == "__main__":
     config.model.tune_projector = ft_config.tune_projector
     config.model.tune_diffusion_model = ft_config.tune_diffusion_model
     config.model.state_dropout_prob = ft_config.state_dropout_prob
+    if ft_config.use_edge_experts:
+        from gr00t.configs.data.embodiment_configs import MODALITY_CONFIGS
+
+        n_views = len(MODALITY_CONFIGS[embodiment_tag]["video"].modality_keys)
+        assert n_views > ft_config.edge_vlm_views, "EE-VLA needs at least one view outside the VLM"
+        config.model.use_edge_experts = True
+        config.model.edge_vlm_views = ft_config.edge_vlm_views
+        config.model.num_edge_views = n_views - ft_config.edge_vlm_views
+        config.model.edge_expert_model = ft_config.edge_expert_model
+        config.model.tune_edge_experts = ft_config.tune_edge_experts
+        config.model.edge_dropout_p = ft_config.edge_dropout_p
+        config.model.edge_dropout_unit = ft_config.edge_dropout_unit
     config.model.random_rotation_angle = ft_config.random_rotation_angle
     config.model.color_jitter_params = ft_config.color_jitter_params
     config.model.use_percentiles = ft_config.use_percentiles
