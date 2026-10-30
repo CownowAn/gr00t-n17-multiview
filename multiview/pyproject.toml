@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=67", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "multiview_tasks"
+version = "0.1.0"
+description = "Multi-view observability task variants for RoboCasa GR1 tabletop tasks"
+requires-python = ">=3.10"
+# robocasa / robosuite / gymnasium come from the robocasa_uv sim environment.
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["multiview_tasks*"]

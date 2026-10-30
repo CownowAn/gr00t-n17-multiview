@@ -251,6 +251,8 @@ class VideoRecordingWrapper(gym.Wrapper):
             # rename the file to indicate success or failure
             original_filestem = self.file_path.stem
             new_filestem = f"{original_filestem}_s{int(self.is_success)}"
+            if getattr(self, "episode_seed", -1) >= 0:
+                new_filestem += f"_seed{self.episode_seed}"
 
             # Add intermediate signals to the filename
             if "grasp_obj" in self.intermediate_signals:
@@ -385,6 +387,7 @@ class VideoRecordingWrapper(gym.Wrapper):
                 os.remove(self.file_path)
 
         self.is_success = False
+        self.episode_seed = -1
         self.is_episode_finished = False
         # "intermediate_signals" contain the metrics for 5DC tasks to indicate language following
         self.intermediate_signals = {}
@@ -396,6 +399,9 @@ class VideoRecordingWrapper(gym.Wrapper):
     def step(self, action):
         result = super().step(action)
         self.step_count += 1
+        # gr1_mv envs report the episode's seed; it goes into the video file name.
+        if isinstance(result[-1], dict) and "episode_seed" in result[-1]:
+            self.episode_seed = int(result[-1]["episode_seed"])
         self.is_episode_finished = bool(result[2] or result[3])
         if self.file_path is not None and ((self.step_count % self.steps_per_render) == 0):
             # frame = self.env.render()

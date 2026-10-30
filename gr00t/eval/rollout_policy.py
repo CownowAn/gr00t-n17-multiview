@@ -136,10 +136,21 @@ def get_libero_env_fn(
 def get_robocasa_env_fn(
     env_name: str,
     robocasa_split: str = "",
+    env_idx: int = 0,
+    total_n_envs: int = 1,
 ):
     def env_fn():
         kwargs = {}
-        if env_name.startswith("robocasa365_panda_omron/"):
+        if env_name.startswith("gr1_mv/"):
+            import os
+
+            import multiview_tasks  # noqa: F401  (registers gr1_mv/* envs)
+
+            os.environ["MUJOCO_GL"] = "egl"
+            if os.environ.get("GR1_MV_EVAL_SEED"):
+                # Episode k of vec env i uses seed base + i + k * n_envs (see MultiViewGrootEnv).
+                kwargs["eval_seed"] = (int(os.environ["GR1_MV_EVAL_SEED"]), env_idx, total_n_envs)
+        elif env_name.startswith("robocasa365_panda_omron/"):
             import gr00t.eval.sim.robocasa365.gymnasium_groot  # noqa: F401
 
             if robocasa_split:
@@ -159,8 +170,8 @@ def get_gym_env(env_name: str, env_idx: int, total_n_envs: int, robocasa_split: 
     env_embodiment = get_embodiment_tag_from_env_name(env_name)
     env_prefix = env_name.split("/")[0]
 
-    if env_prefix in ("robocasa_panda_omron", "robocasa365_panda_omron", "gr1_unified"):
-        env_fn = get_robocasa_env_fn(env_name, robocasa_split=robocasa_split)
+    if env_prefix in ("robocasa_panda_omron", "robocasa365_panda_omron", "gr1_unified", "gr1_mv"):
+        env_fn = get_robocasa_env_fn(env_name, robocasa_split=robocasa_split, env_idx=env_idx, total_n_envs=total_n_envs)
 
     elif env_embodiment in (EmbodimentTag.SIMPLER_ENV_GOOGLE, EmbodimentTag.SIMPLER_ENV_WIDOWX):
         env_fn = get_simpler_env_fn(env_name)
@@ -363,6 +374,17 @@ def _collect_rollout_episodes(
                         episode_infos["q_score"].append(np.max(env_infos["q_score"][env_idx]))
                     if "valid" in env_infos:
                         episode_infos["valid"].append(all(env_infos["valid"][env_idx]))
+                    # gr1_mv envs: per-episode flags, metrics and the episode's seed
+                    final = env_infos["final_info"][env_idx] if "final_info" in env_infos else None
+                    if isinstance(final, dict):
+                        for key, value in final.items():
+                            last = value[-1] if isinstance(value, (list, tuple, np.ndarray)) and len(value) else value
+                            if key.startswith(("phase/", "diag/")):
+                                episode_infos[key].append(bool(last))
+                            elif key.startswith("metric/"):
+                                episode_infos[key].append(float(last))
+                            elif key == "episode_seed":
+                                episode_infos[key].append(int(last))
                     # Accumulate per-episode results. Both lists are captured
                     # BEFORE the per-env trackers are reset to 0 below — without
                     # this ordering downstream consumers silently see
@@ -672,6 +694,10 @@ class RolloutConfig:
 
 if __name__ == "__main__":
     args = tyro.cli(RolloutConfig)
+    if args.seed is not None:
+        import os
+
+        os.environ["GR1_MV_EVAL_SEED"] = str(args.seed)  # gr1_mv envs: per-episode seeds
 
     # validate policy configuration
     assert (args.model_path and not (args.policy_client_host or args.policy_client_port)) or (
